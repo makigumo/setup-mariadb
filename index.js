@@ -29,25 +29,30 @@ function addToPath(newPath) {
 }
 
 function isMac() {
-  return process.platform == 'darwin';
+  return process.platform === 'darwin';
 }
 
 function isWindows() {
-  return process.platform == 'win32';
+  return process.platform === 'win32';
 }
 
 function formulaPresent(formula) {
-  const tapPrefix = process.arch == 'arm64' ? '/opt/homebrew' : '/usr/local/Homebrew';
+  const tapPrefix = process.arch === 'arm64' ? '/opt/homebrew' : '/usr/local/Homebrew';
   const tap = `${tapPrefix}/Library/Taps/homebrew/homebrew-core`;
   return fs.existsSync(`${tap}/Formula/${formula[0]}/${formula}.rb`) || fs.existsSync(`${tap}/Aliases/${formula}`);
 }
 
 // latest LTS release
-const defaultVersion = '11.4';
+const rollingReleaseVersion = ['11.5'];
+const longTermVersions = ['11.4', '10.11', '10.6', '10.5'];
+const shortTermVersions = ['11.2', '11.1'];
+
+const supportedVersions = [...longTermVersions, ...shortTermVersions, ...rollingReleaseVersion];
+
+const defaultVersion = longTermVersions[0];
 const mariadbVersion = process.env['INPUT_MARIADB-VERSION'] || defaultVersion;
 
-// only add LTS releases going forward
-if (!['11.4', '11.2', '11.1', '10.11', '10.6', '10.5'].includes(mariadbVersion)) {
+if (!supportedVersions.includes(mariadbVersion)) {
   throw 'Invalid MariaDB version: ' + mariadbVersion;
 }
 
@@ -65,23 +70,29 @@ if (isMac()) {
   run(`brew install ${formula}`);
 
   // start
-  const prefix = process.arch == 'arm64' ? '/opt/homebrew' : '/usr/local';
+  const prefix = process.arch === 'arm64' ? '/opt/homebrew' : '/usr/local';
   bin = `${prefix}/opt/${formula}/bin`;
   run(`${bin}/mysql.server start`);
 
   addToPath(bin);
+
+  // add permissions
+  if (mariadbVersion === '10.3') {
+    run(`${bin}/mysql -u root -e "GRANT ALL PRIVILEGES ON *.* TO ''@'localhost'"`);
+    run(`${bin}/mysql -u root -e "FLUSH PRIVILEGES"`);
+  }
 } else if (isWindows()) {
   // install
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mariadb-'));
   process.chdir(tmpDir);
   const versionMap = {
-    '11.4': '11.4.2',
-    '11.2': '11.2.2',
-    '11.1': '11.1.2',
-    '11.0': '11.0.4',
-    '10.11': '10.11.6',
-    '10.6': '10.6.16',
-    '10.5': '10.5.23'
+    '11.5': '11.5.2',
+    '11.4': '11.4.3',
+    '11.2': '11.2.5',
+    '11.1': '11.1.6',
+    '10.11': '10.11.9',
+    '10.6': '10.6.19',
+    '10.5': '10.5.26'
   };
   const fullVersion = versionMap[mariadbVersion];
   run(`curl -Ls -o mariadb.msi https://downloads.mariadb.com/MariaDB/mariadb-${fullVersion}/winx64-packages/mariadb-${fullVersion}-winx64.msi`);
@@ -106,8 +117,8 @@ if (isMac()) {
   run(`sudo apt-key adv --recv-keys --keyserver hkp://keyserver.ubuntu.com:80 0xF1656F24C74CD1D8`);
   run(`echo "deb https://downloads.mariadb.com/MariaDB/mariadb-${mariadbVersion}/repo/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) main" | sudo tee /etc/apt/sources.list.d/mariadb.list`);
   run(`sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/mariadb.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"`);
-  const package = ['11.4', '11.2', '11.1', '11.0', '10.11'].includes(mariadbVersion) ? `mariadb-server` : `mariadb-server-${mariadbVersion}`;
-  run(`sudo apt-get install ${package}`);
+  const install_package = ['11.5', '11.4', '11.2', '11.1', '10.11'].includes(mariadbVersion) ? `mariadb-server` : `mariadb-server-${mariadbVersion}`;
+  run(`sudo apt-get install ${install_package}`);
 
   // start
   run(`sudo systemctl start mariadb`);
