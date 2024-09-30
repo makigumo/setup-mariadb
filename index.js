@@ -114,9 +114,28 @@ if (isMac()) {
   }
 
   // install
+  const ubuntuReleaseName = function() {
+    switch (image) {
+      case 'image20':
+        return 'focal';
+      case 'image22':
+        return 'jammy';
+      case 'image20':
+        return 'noble';
+      default:
+        return execSync('. /etc/os-release && echo $VERSION_CODENAME');
+    }
+  };
   run(`sudo apt-key adv --recv-keys --keyserver hkp://keyserver.ubuntu.com:80 0xF1656F24C74CD1D8`);
-  run(`echo "deb https://downloads.mariadb.com/MariaDB/mariadb-${mariadbVersion}/repo/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) main" | sudo tee /etc/apt/sources.list.d/mariadb.list`);
-  run(`sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/mariadb.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"`);
+  run(`cat << EOF
+X-Repolib-Name: MariaDB
+Types: deb
+URIs: https://deb.mariadb.org/${mariadbVersion}/ubuntu
+Suites: ${ubuntuReleaseName()}
+Components: main main/debug
+Signed-By: /etc/apt/keyrings/mariadb-keyring.pgp
+EOF | sudo tee /etc/apt/sources.list.d/mariadb.sources`);
+  run(`sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/mariadb.sources" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"`);
   const install_package = ['11.5', '11.4', '11.2', '11.1', '10.11'].includes(mariadbVersion) ? `mariadb-server` : `mariadb-server-${mariadbVersion}`;
   run(`sudo apt-get install ${install_package}`);
 
