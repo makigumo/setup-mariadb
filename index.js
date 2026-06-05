@@ -22,39 +22,44 @@ function addToPath(newPath) {
 }
 
 function isMac() {
-  return process.platform == 'darwin';
+  return process.platform === 'darwin';
 }
 
 function isWindows() {
-  return process.platform == 'win32';
+  return process.platform === 'win32';
 }
 
 function formulaPresent(formula) {
-  const tapPrefix = process.arch == 'arm64' ? '/opt/homebrew' : '/usr/local/Homebrew';
+  const tapPrefix = process.arch === 'arm64' ? '/opt/homebrew' : '/usr/local/Homebrew';
   const tap = `${tapPrefix}/Library/Taps/homebrew/homebrew-core`;
   return fs.existsSync(`${tap}/Formula/${formula[0]}/${formula}.rb`) || fs.existsSync(`${tap}/Aliases/${formula}`);
 }
 
-const defaultVersion = '11.8';
+// latest LTS release
+const rollingReleaseVersion = ['13.0'];
+const longTermVersions = ['12.3', '11.8', '11.4', '10.11', '10.6'];
+
+const supportedVersions = [...longTermVersions, ...rollingReleaseVersion];
+
+const defaultVersion = longTermVersions[0];
 const mariadbVersion = process.env['INPUT_MARIADB-VERSION'] || defaultVersion;
 
-// only LTS releases
-if (!['11.8', '11.4', '10.11', '10.6', '10.5'].includes(mariadbVersion)) {
-  throw 'Invalid MariaDB version: ' + mariadbVersion;
+if (!supportedVersions.includes(mariadbVersion)) {
+  throw new Error('Invalid MariaDB version: ' + mariadbVersion);
 }
 
 const database = process.env['INPUT_DATABASE'];
 const defaultUser = os.userInfo().username;
 const user = process.env['INPUT_USER'] || defaultUser;
 if (!/^[a-z0-9_-]+$/i.test(user)) {
-  throw `Unsupported user: ${user}`;
+  throw new Error(`Unsupported user: ${user}`);
 }
-const userExists = user == 'root' || (isMac() && user == defaultUser);
+const userExists = user === 'root' || (isMac() && user === defaultUser);
 
-const prog = parseFloat(mariadbVersion) >= 11 ? 'mariadb' : 'mysql';
-const adminProg = parseFloat(mariadbVersion) >= 11 ? 'mariadb-admin' : 'mysqladmin';
+const prog = Number.parseFloat(mariadbVersion) >= 11 ? 'mariadb' : 'mysql';
+const adminProg = Number.parseFloat(mariadbVersion) >= 11 ? 'mariadb-admin' : 'mysqladmin';
 
-let bin;
+let bin, cmdPrefix;
 
 if (isMac()) {
   const formula = `mariadb@${mariadbVersion}`;
@@ -66,7 +71,7 @@ if (isMac()) {
   run(`brew`, `install`, `--quiet`, formula);
 
   // start
-  const prefix = process.arch == 'arm64' ? '/opt/homebrew' : '/usr/local';
+  const prefix = process.arch === 'arm64' ? '/opt/homebrew' : '/usr/local';
   bin = `${prefix}/opt/${formula}/bin`;
   run(`${bin}/mysql.server`, `start`);
 
@@ -78,11 +83,12 @@ if (isMac()) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mariadb-'));
   process.chdir(tmpDir);
   const versionMap = {
-    '11.8': '11.8.2',
-    '11.4': '11.4.7',
-    '10.11': '10.11.13',
-    '10.6': '10.6.22',
-    '10.5': '10.5.29'
+    '13.0': '13.0.1',
+    '12.3': '12.3.2',
+    '11.8': '11.8.8',
+    '11.4': '11.4.12',
+    '10.11': '10.11.18',
+    '10.6': '10.6.27',
   };
   const fullVersion = versionMap[mariadbVersion];
   run(`C:\\Windows\\System32\\curl.exe`, `-Ls`, `-o`, `mariadb.msi`, `https://dlm.mariadb.com/MariaDB/mariadb-${fullVersion}/winx64-packages/mariadb-${fullVersion}-winx64.msi`);
@@ -93,7 +99,7 @@ if (isMac()) {
 
   cmdPrefix = [`${bin}\\${prog}`, `-u`, `root`];
 } else {
-  if (process.arch != 'arm64') {
+  if (process.arch !== 'arm64') {
     // clear previous data
     run(`sudo`, `systemctl`, `stop`, `mysql.service`);
     run(`sudo`, `rm`, `-rf`, `/var/lib/mysql`);
@@ -103,10 +109,19 @@ if (isMac()) {
   run(`sudo`, `mkdir`, `-p`, `/etc/apt/trusted.gpg.d`);
   run(`sudo`, `curl`, `-s`, `-o`, `/etc/apt/trusted.gpg.d/mariadb-keyring-2019.gpg`, `https://supplychain.mariadb.com/mariadb-keyring-2019.gpg`);
   const codename =  spawnSync(`lsb_release`, [`-cs`], {encoding: 'utf-8'}).stdout.trim();
-  const mariadbList = `deb [arch=amd64,arm64] https://dlm.mariadb.com/repo/mariadb-server/${mariadbVersion}/repo/ubuntu ${codename} main\n`;
-  spawnSync(`sudo`, [`tee`, `/etc/apt/sources.list.d/mariadb.list`], {input: mariadbList});
+  const mariadbList = `
+ X-Repolib-Name: MariaDB
+ Types: deb
+ URIs: https://deb.mariadb.org/${mariadbVersion}/ubuntu
+ Suites: ${codename}
+ Components: main main/debug
+ Signed-By: /etc/apt/trusted.gpg.d/mariadb-keyring-2019.gpg
+`;
+  spawnSync(`sudo`, [`tee`, `/etc/apt/sources.list.d/mariadb.sources`], {input: mariadbList});
   run(`sudo`, `apt-get`, `-qq`, `update`);
-  run(`sudo`, `apt-get`, `-qq`, `-o`, `Dpkg::Use-Pty=0`, `install`, `mariadb-server`);
+
+  const install_package = ['10.6'].includes(mariadbVersion) ? `mariadb-server-${mariadbVersion}` : `mariadb-server`;
+  run(`sudo`, `apt-get`, `-qq`, `-o`, `Dpkg::Use-Pty=0`, `install`, install_package);
 
   // start
   run(`sudo`, `systemctl`, `start`, `mariadb`);
@@ -121,7 +136,7 @@ if (isMac()) {
 if (!userExists) {
   run(...cmdPrefix, `-e`, `CREATE USER '${user}'@'localhost' IDENTIFIED BY ''`);
 }
-if (!userExists || (isMac() && user == 'root')) {
+if (!userExists || (isMac() && user === 'root')) {
   run(...cmdPrefix, `-e`, `GRANT ALL PRIVILEGES ON *.* TO '${user}'@'localhost' IDENTIFIED BY ''`);
   run(...cmdPrefix, `-e`, `FLUSH PRIVILEGES`);
 }
